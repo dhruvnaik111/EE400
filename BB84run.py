@@ -2,12 +2,12 @@ import requests
 import time
 import random
 
-# --- Network & Hardware Configuration ---
+# Network & Hardware Configuration 
 MACHINE1_IP = "169.254.157.246"  # Alice and Bob
 MACHINE2_IP = "169.254.15.141"   # Eve
 PORT = 8080
 
-# Minimum photon count on Channel 0 to register as a "detection"
+# Minimum photon count on Channel 2 to register as a "detection"
 DETECTION_THRESHOLD = 50 
 
 def send_qued_command(ip, action, param, value=None):
@@ -83,24 +83,24 @@ def run_physical_bb84_with_eve(alice_file, bob_file, test_limit=50):
         # 5. Fetch the photon counts from Bob's detector on Machine 1
         counts_response = send_qued_command(MACHINE1_IP, "get", "cnt")
         
-        # --- UPDATED MULTILINE PARSING LOGIC ---
-        single_0_count = 0
+        # UPDATED MULTILINE PARSING LOGIC FOR APD 2 
+        single_2_count = 0
         if counts_response:
             for line in counts_response.split('\n'):
                 line = line.strip()
-                # Look specifically for the line that starts with "0:"
-                if line.startswith('0:'):
+                # Look specifically for the line that starts with "2:"
+                if line.startswith('2:'):
                     try:
                         # Split by the colon and grab the number on the right
-                        single_0_count = int(line.split(':')[1].strip())
+                        single_2_count = int(line.split(':')[1].strip())
                     except ValueError:
                         print(f"Warning: Could not parse integer from line -> {line}")
-                    break # Stop searching once we find detector 0
+                    break # Stop searching once we find detector 2
         else:
             print("Warning: Received empty count response from quED.")
 
         # 6. Determine if we keep the bit based on Bob's detection
-        photon_detected = single_0_count > DETECTION_THRESHOLD
+        photon_detected = single_2_count > DETECTION_THRESHOLD
         bases_match = (alice_basis == bob_basis)
         
         status = "Discarded"
@@ -108,13 +108,13 @@ def run_physical_bb84_with_eve(alice_file, bob_file, test_limit=50):
             reconciled_key.append(alice_bit)
             status = "KEPT"
             
-        print(f"Iter {iteration+1} | Alice: {alice_angle}° Bob: {bob_angle}° Eve: {eve_angle}° | Count: {single_0_count} | {status}")
+        print(f"Iter {iteration+1} | Alice: {alice_angle}° Bob: {bob_angle}° Eve: {eve_angle}° | Count: {single_2_count} | {status}")
         
         iteration += 1
 
-    print("\n--- Hardware Run Complete ---")
+    print("\n Hardware Run Complete")
     print(f"Secure Key Generated: {''.join(reconciled_key)}")
     print(f"Key Length: {len(reconciled_key)} bits")
 
 if __name__ == "__main__":
-    run_physical_bb84_with_eve("ZufallAliceMain.txt", "ZufallBobMain.txt", test_limit=20)
+    run_physical_bb84_with_eve("ZufallAliceMain.txt", "ZufallBobMain.txt", test_limit=100)
