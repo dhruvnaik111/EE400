@@ -83,10 +83,11 @@ def run_physical_bb84_with_eve(alice_file, bob_file, test_limit=50):
         # 5. Fetch the photon counts from Bob's detector on Machine 1
         counts_response = send_qued_command(MACHINE1_IP, "get", "cnt")
         
-        # UPDATED MULTILINE PARSING LOGIC FOR APD 2 
+        # UPDATED HTML PARSING LOGIC FOR APD 2 
         single_2_count = 0
         if counts_response:
-            for line in counts_response.split('\n'):
+            # Split the string by the HTML line break tag
+            for line in counts_response.split('<br>'):
                 line = line.strip()
                 # Look specifically for the line that starts with "2:"
                 if line.startswith('2:'):
