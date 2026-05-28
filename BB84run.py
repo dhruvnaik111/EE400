@@ -1,60 +1,111 @@
-def generate_bb84_key(alice_file, bob_file):
-    # Read the text files
+import requests
+import time
+import random
+
+# --- Network & Hardware Configuration ---
+MACHINE1_IP = "169.254.157.246"  # Alice and Bob
+MACHINE2_IP = "169.254.15.141"   # Eve
+PORT = 8080
+
+# Minimum photon count on Channel 0 to register as a "detection"
+DETECTION_THRESHOLD = 50 
+
+def send_qued_command(ip, action, param, value=None):
+    """Sends the HTTP GET request to the quED API."""
+    url = f"http://{ip}:{PORT}/?action={action}&param={param}"
+    if value is not None:
+        url += f"&value={value}"
+    try:
+        response = requests.get(url, timeout=5)
+        return response.text.strip()
+    except requests.exceptions.RequestException as e:
+        print(f"Error communicating with {ip}: {e}")
+        return None
+
+def run_physical_bb84_with_eve(alice_file, bob_file, test_limit=50):
+    # Read the random number files
     with open(alice_file, 'r') as f:
         alice_data = f.read().strip()
     with open(bob_file, 'r') as f:
         bob_data = f.read().strip()
         
-    # Ensure both files are the same length
     min_len = min(len(alice_data), len(bob_data))
-    
     reconciled_key = []
-    total_photons_sent = 0
-    sifted_mismatched_basis = 0
-    sifted_no_detection = 0
+    
+    # Motor Angle Mappings based on (Basis, Bit)
+    # Basis 0 = H/V, Basis 1 = Diagonal (+/-)
+    alice_hwp_angles = {
+        ('0', '0'): 0.0,    # H -> 0 deg
+        ('0', '1'): 45.0,   # V -> 90 deg (HWP at 45)
+        ('1', '0'): 22.5,   # + -> +45 deg (HWP at 22.5)
+        ('1', '1'): -22.5   # - -> -45 deg (HWP at -22.5)
+    }
+    
+    bob_pol_angles = {
+        ('0', '0'): 0.0,    # Measure H
+        ('0', '1'): 90.0,   # Measure V
+        ('1', '0'): 45.0,   # Measure +
+        ('1', '1'): -45.0   # Measure -
+    }
 
-    # Process bits in chunks of 2 (Basis, Bit)
+    # Eve's possible measurement angles mapping to H, V, + and -
+    eve_possible_angles = [0.0, 90.0, 45.0, -45.0]
+
+    print("Starting Physical BB84 Protocol with Eve...")
+    print(f"Testing first {test_limit} iterations.\n")
+
+    iteration = 0
     for i in range(0, min_len - 1, 2):
-        total_photons_sent += 1
+        if iteration >= test_limit:
+            break
+            
+        alice_basis, alice_bit = alice_data[i], alice_data[i+1]
+        bob_basis, bob_bit = bob_data[i], bob_data[i+1]
         
-        alice_basis = alice_data[i]
-        alice_bit = alice_data[i+1]
+        # 1. Lookup the physical angles for Alice and Bob
+        alice_angle = alice_hwp_angles[(alice_basis, alice_bit)]
+        bob_angle = bob_pol_angles[(bob_basis, bob_bit)]
         
-        bob_basis = bob_data[i]
-        bob_bit = bob_data[i+1]
+        # 2. Eve randomly selects her measurement angle
+        eve_angle = random.choice(eve_possible_angles)
         
-        # 1. Did Bob physically detect a photon?
-        # In a single polarizer setup, Bob only gets a deterministic click 
-        # if the bases match AND the bits match. 
-        # (If bases mismatch, he gets a click 50% of the time, but those get thrown out anyway).
-        if alice_basis == bob_basis:
-            if alice_bit == bob_bit:
-                # Photon detected and bases match! Key bit generated.
-                reconciled_key.append(alice_bit)
-            else:
-                # Photon blocked by polarizer. No detection.
-                sifted_no_detection += 1
-        else:
-            # Bases mismatched. Discarded during public communication.
-            sifted_mismatched_basis += 1
+        # 3. Command the motors to move
+        # Machine 1: Set Alice and Bob
+        send_qued_command(MACHINE1_IP, "set", "pm1", alice_angle)
+        send_qued_command(MACHINE1_IP, "set", "pm2", bob_angle)
+        
+        # Machine 2: Set Eve (Assuming plugged into pm1)
+        send_qued_command(MACHINE2_IP, "set", "pm1", eve_angle)
+        
+        # 4. Wait for physical rotation to complete 
+        # Increased to 0.5s to ensure all three motors across the network finish moving
+        time.sleep(0.5)
+        
+        # 5. Fetch the photon counts from Bob's detector on Machine 1
+        counts_response = send_qued_command(MACHINE1_IP, "get", "cnt")
+        
+        try:
+            single_0_count = int(counts_response.split(',')[0].strip())
+        except (ValueError, AttributeError):
+            print(f"Failed to parse count response: {counts_response}")
+            single_0_count = 0
 
-    final_key_string = "".join(reconciled_key)
-    
-    print(f"--- BB84 Protocol Results ---")
-    print(f"Total Photons Sent: {total_photons_sent}")
-    print(f"Discarded (Basis Mismatch): {sifted_mismatched_basis}")
-    print(f"Discarded (No Detection): {sifted_no_detection}")
-    print(f"Final Secure Key Length: {len(reconciled_key)} bits")
-    
-    # Check if we have enough bits for the 32x32 image (1024 bits)
-    if len(reconciled_key) >= 1024:
-        print("\nSuccess! You have enough bits to encode the 32x32 image.")
-        print(f"Your Key (First 256 bits): {final_key_string[:256]}...")
-    else:
-        print(f"\nWarning: You only generated {len(reconciled_key)} bits.")
-        print("You need 1024 bits for a 32x32 image. You may need longer RNG strings.")
+        # 6. Determine if we keep the bit based on Bob's detection
+        photon_detected = single_0_count > DETECTION_THRESHOLD
+        bases_match = (alice_basis == bob_basis)
+        
+        status = "Discarded"
+        if bases_match and photon_detected:
+            reconciled_key.append(alice_bit)
+            status = "KEPT"
+            
+        print(f"Iter {iteration+1} | Alice: {alice_angle}° Bob: {bob_angle}° Eve: {eve_angle}° | Count: {single_0_count} | {status}")
+        
+        iteration += 1
 
-    return final_key_string
+    print("\n--- Hardware Run Complete ---")
+    print(f"Secure Key Generated: {''.join(reconciled_key)}")
+    print(f"Key Length: {len(reconciled_key)} bits")
 
-# To run this, place ZufallAliceMain.txt and ZufallBobMain.txt in the same directory
-# generated_key = generate_bb84_key("ZufallAliceMain.txt", "ZufallBobMain.txt")
+if __name__ == "__main__":
+    run_physical_bb84_with_eve("ZufallAliceMain.txt", "ZufallBobMain.txt", test_limit=20)
