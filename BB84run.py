@@ -78,17 +78,26 @@ def run_physical_bb84_with_eve(alice_file, bob_file, test_limit=50):
         send_qued_command(MACHINE2_IP, "set", "pm1", eve_angle)
         
         # 4. Wait for physical rotation to complete 
-        # Increased to 0.5s to ensure all three motors across the network finish moving
         time.sleep(0.5)
         
         # 5. Fetch the photon counts from Bob's detector on Machine 1
         counts_response = send_qued_command(MACHINE1_IP, "get", "cnt")
         
-        try:
-            single_0_count = int(counts_response.split(',')[0].strip())
-        except (ValueError, AttributeError):
-            print(f"Failed to parse count response: {counts_response}")
-            single_0_count = 0
+        # --- UPDATED MULTILINE PARSING LOGIC ---
+        single_0_count = 0
+        if counts_response:
+            for line in counts_response.split('\n'):
+                line = line.strip()
+                # Look specifically for the line that starts with "0:"
+                if line.startswith('0:'):
+                    try:
+                        # Split by the colon and grab the number on the right
+                        single_0_count = int(line.split(':')[1].strip())
+                    except ValueError:
+                        print(f"Warning: Could not parse integer from line -> {line}")
+                    break # Stop searching once we find detector 0
+        else:
+            print("Warning: Received empty count response from quED.")
 
         # 6. Determine if we keep the bit based on Bob's detection
         photon_detected = single_0_count > DETECTION_THRESHOLD
